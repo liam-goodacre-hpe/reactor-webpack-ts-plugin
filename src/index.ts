@@ -63,6 +63,27 @@ export default class ReactExtJSWebpackTSPlugin {
       cb();
     });
 
+    const me = this;
+
+    /**
+     * Adds the code for the specified function call to the manifest.js file
+     * @param {Object} call A function call AST node.
+     */
+    const addToManifest = function (call) {
+      let file;
+      try {
+        file = this.state.module.resource;
+        let deps = me.dependencies[file];
+        if (!deps) {
+          deps = me.dependencies[file] = [];
+        }
+        deps.push(astring(call));
+      }
+      catch (e) {
+        console.error(`Error processing ${file}, ${e}`);
+      }
+    };
+
     // extract xtypes from JSX tags
     compiler.plugin('compilation', (compilation, params) => {
       compilation.plugin('build-module', (module) => {
@@ -85,37 +106,19 @@ export default class ReactExtJSWebpackTSPlugin {
           }
         }
       });
+
+      params.normalModuleFactory.plugin('parser', (parser, options) => {
+        // extract xtypes and classes from Ext.create calls
+        parser.plugin('call Ext.create', addToManifest);
+
+        // copy Ext.require calls to the manifest.  This allows the users to explicitly require a class if the plugin fails to detect it.
+        parser.plugin('call Ext.require', addToManifest);
+
+        // copy Ext.define calls to the manifest.  This allows users to write standard Ext JS classes.
+        parser.plugin('call Ext.define', addToManifest);
+      });
+
     });
-
-    const me = this;
-
-    /**
-     * Adds the code for the specified function call to the manifest.js file
-     * @param {Object} call A function call AST node.
-     */
-    const addToManifest = function (call) {
-      let file;
-      try {
-        file = this.state.module.resource;
-        let deps = me.dependencies[file];
-        if (!deps) {
-          deps = me.dependencies[file] = [];
-        }
-        deps.push(astring(call));
-      }
-      catch (e) {
-        console.error(`Error processing ${file}, ${e}`);
-      }
-    };
-
-    // extract xtypes and classes from Ext.create calls
-    compiler.parser.plugin('call Ext.create', addToManifest);
-
-    // copy Ext.require calls to the manifest.  This allows the users to explicitly require a class if the plugin fails to detect it.
-    compiler.parser.plugin('call Ext.require', addToManifest);
-
-    // copy Ext.define calls to the manifest.  This allows users to write standard Ext JS classes.
-    compiler.parser.plugin('call Ext.define', addToManifest);
 
     // once all modules are processed, create the optimized Ext JS build.
     compiler.plugin('emit', (compilation, callback) => {
@@ -132,14 +135,14 @@ export default class ReactExtJSWebpackTSPlugin {
         .then(() => {
           // the following is needed for html-webpack-plugin to include <script> and <link> tags for Ext JS
           const jsChunk = compilation.addChunk(`${this.options.output}-js`);
-          jsChunk.initial = true;
+          jsChunk.isInitial = () => true;
           jsChunk.ids = [0]; // html-webpack-plugin needs ids to be defined so that it can fetch webpack stats
           jsChunk.files.push(path.join(this.options.output, 'ext.js'));
           jsChunk.files.push(path.join(this.options.output, 'ext.css'));
 
           // this forces html-webpack-plugin to include ext.js first
-          jsChunk.entry = true;
-          jsChunk.id = 9999;
+          jsChunk.hasRuntime = () => true;
+          jsChunk.id = -1; // this forces html-webpack-plugin to include ext.js first
 
           callback();
         })
